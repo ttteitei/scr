@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>쏘카 특수차종 배달 거점 음영지역 분석기</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet Map CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Turf.js for Geospatial analysis (Hexagons, Distances) -->
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+    
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+
+    <!-- Chart.js for Visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
+        #map { background-color: #f3f4f6; }
+        /* Custom scrollbar for sidebar */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        
+        /* Leaflet popup customization */
+        .leaflet-popup-content-wrapper { border-radius: 0.5rem; padding: 0; overflow: hidden; }
+        .leaflet-popup-content { margin: 0; }
+        .zone-marker-icon {
+            width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);
+        }
+        .marker-expansion { background-color: #3b82f6; } /* Blue for 부름확대존 */
+        .marker-reduction { background-color: #9ca3af; } /* Gray for 부름축소존 */
+    </style>
+</head>
+<body class="flex h-screen bg-gray-100 overflow-hidden text-gray-800">
+
+    <!-- Sidebar -->
+    <aside class="w-96 bg-white shadow-2xl flex flex-col z-20 relative">
+        <!-- Header -->
+        <div class="p-4 border-b border-gray-200 bg-blue-50">
+            <h1 class="text-xl font-bold text-blue-900 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" />
+                </svg>
+                배달 거점 분석기
+            </h1>
+            <p class="text-xs text-gray-600 mt-1">존별 개별 반경 적용 배달 거점 분석</p>
+        </div>
+
+        <!-- Controls -->
+        <div class="p-6 flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-6">
+            
+            <!-- Data Upload -->
+            <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                <h2 class="font-semibold text-gray-800 mb-3 text-sm">1. 쏘카존 데이터 설정</h2>
+                <button id="btn-load-sample" class="w-full mb-3 py-2 px-4 bg-gray-800 hover:bg-gray-700 text-white text-sm rounded-lg transition-colors shadow-sm">
+                    샘플 데이터 불러오기
+                </button>
+                <div class="relative">
+                    <div class="absolute inset-0 flex items-center">
+                        <div class="w-full border-t border-gray-300"></div>
+                    </div>
+                    <div class="relative flex justify-center text-sm">
+                        <span class="px-2 bg-gray-50 text-gray-500">또는 CSV 업로드</span>
+                    </div>
+                </div>
+                <input type="file" id="csv-upload" accept=".csv" class="mt-3 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"/>
+                
+                <div class="relative mt-4 mb-3">
+                    <div class="absolute inset-0 flex items-center">
+                        <div class="w-full border-t border-gray-300"></div>
+                    </div>
+                    <div class="relative flex justify-center text-sm">
+                        <span class="px-2 bg-gray-50 text-gray-500">또는 엑셀 데이터 붙여넣기</span>
+                    </div>
+                </div>
+                <button id="btn-open-paste" class="w-full py-2 px-4 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-semibold rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                    엑셀 데이터 직접 입력
+                </button>
+
+                <button id="btn-view-data" class="w-full mt-4 py-2 px-4 bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 text-sm font-semibold rounded-lg transition-colors shadow-sm hidden">
+                    적용 데이터 조회 및 편집
+                </button>
+            </div>
+
+            <!-- Analysis Settings -->
+            <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex-1">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="font-semibold text-gray-800 text-sm">2. 헥사곤 분석 레이어</h2>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="toggle-hex" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+
+                <!-- Shadow Type Selection -->
+                <div class="space-y-4" id="analysis-controls" style="opacity: 0.5; pointer-events: none;">
+                    <div>
+                        <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">음영지역 판별 기준</label>
+                        <div class="space-y-2">
+                            <label class="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors" id="label-mode-overall">
+                                <input type="radio" name="analysis_mode" value="overall" class="mt-1" checked>
+                                <div>
+                                    <div class="text-sm font-medium text-gray-800">종합 음영지역 스캔</div>
+                                    <div class="text-xs text-gray-500 mt-1">부름존 설정 반경 기준 호출 가능 차종이 전체의 50% 미만인 구역</div>
+                                </div>
+                            </label>
+                            
+                            <label class="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors" id="label-mode-specific">
+                                <input type="radio" name="analysis_mode" value="specific" class="mt-1">
+                                <div>
+                                    <div class="text-sm font-medium text-gray-800">특정 차종 필터링</div>
+                                    <div class="text-xs text-gray-500 mt-1">선택한 차종을 해당 존의 설정 반경 내에서 부를 수 없는 지역</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Car Type Filters -->
+                    <div id="car-filter-container" class="hidden">
+                        <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">대상 차종 선택</label>
+                        <div id="car-checkboxes" class="grid grid-cols-2 gap-2 text-sm">
+                            <div class="text-gray-400 italic">데이터를 먼저 불러오세요.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Statistics Panel -->
+            <div id="stats-panel" class="bg-gray-50 p-4 rounded-xl border border-gray-200 hidden">
+                <h3 class="text-sm font-semibold text-gray-700 mb-2">분석 요약</h3>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <div class="text-gray-500 text-xs">전체 헥사곤</div>
+                        <div class="font-bold text-lg" id="stat-total-hex">0</div>
+                    </div>
+                    <div>
+                        <div class="text-red-500 text-xs font-bold">음영지역 비율</div>
+                        <div class="font-bold text-lg text-red-600" id="stat-shadow-ratio">0%</div>
+                    </div>
+                </div>
+                <div class="mt-3 pt-3 border-t border-gray-200">
+                    <div class="text-gray-500 text-xs mb-2">주요 음영지역 (예상)</div>
+                    <div id="stat-shadow-regions" class="flex flex-wrap gap-1">
+                        <!-- Regions populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visualization Report Button -->
+            <button id="btn-vis-report" class="w-full mb-6 py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 hidden group">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 group-hover:scale-110 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                권역별 커버리지 시각화 리포트
+            </button>
+            
+        </div>
+    </aside>
+
+    <!-- Map Area -->
+    <main class="flex-1 relative">
+        <div id="map" class="absolute inset-0 z-0"></div>
+        
+        <!-- Legend -->
+        <div class="absolute bottom-6 right-6 bg-white p-4 rounded-xl shadow-lg z-10 border border-gray-200 text-sm">
+            <h4 class="font-bold text-gray-800 mb-3 text-xs uppercase tracking-wider">범례</h4>
+            <div class="space-y-2">
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded-full bg-blue-500 border border-white shadow-sm"></div>
+                    <span class="text-gray-700">부름확대존 (외곽 거점)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded-full bg-gray-400 border border-white shadow-sm"></div>
+                    <span class="text-gray-700">부름축소존 (도심/워크인)</span>
+                </div>
+                <hr class="my-2 border-gray-100">
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 bg-red-500 bg-opacity-40 border border-red-600"></div>
+                    <span class="text-gray-700">음영지역 (서비스 불가)</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="w-4 h-4 bg-blue-500 bg-opacity-10 border border-blue-400"></div>
+                    <span class="text-gray-700">커버지역 (해당존 반경 내)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading" class="absolute inset-0 bg-white bg-opacity-80 z-20 flex flex-col items-center justify-center hidden">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+            <p class="text-gray-800 font-medium">데이터 분석 및 헥사곤 렌더링 중...</p>
+        </div>
+
+        <!-- Data Table Modal -->
+        <div id="data-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[100] hidden flex-col items-center justify-center backdrop-blur-sm p-4 flex opacity-0 transition-opacity duration-300" style="display: none;">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-6xl flex flex-col max-h-[90vh] transform scale-95 transition-transform duration-300" id="data-modal-content">
+                <div class="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+                        </svg>
+                        적용 데이터 목록 및 편집
+                    </h3>
+                    <button id="btn-close-modal" class="text-gray-500 hover:text-gray-800 p-1 rounded-full hover:bg-gray-200 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="p-0 flex-1 overflow-auto custom-scrollbar">
+                    <table class="w-full text-sm text-left text-gray-500">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0 shadow-sm z-10">
+                            <tr>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap">ZID</th>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap">권역</th>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap">존이름</th>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap">존구분</th>
+                                <th scope="col" class="px-4 py-3 whitespace-nowrap text-center text-blue-700 bg-blue-50">반경km</th>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap text-right">월주차료</th>
+                                <th scope="col" class="px-6 py-3 whitespace-nowrap">차종</th>
+                                <th scope="col" class="px-4 py-3 whitespace-nowrap text-center bg-gray-200">지도 표시</th>
+                            </tr>
+                        </thead>
+                        <tbody id="data-table-body">
+                            <!-- Rows populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl flex justify-between items-center text-sm text-gray-500">
+                    <span id="data-table-count" class="font-semibold text-gray-700">총 0건</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Paste Data Modal -->
+        <div id="paste-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-[110] hidden flex-col items-center justify-center backdrop-blur-sm p-4 flex opacity-0 transition-opacity duration-300" style="display: none;">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl flex flex-col transform scale-95 transition-transform duration-300" id="paste-modal-content">
+                <div class="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                        엑셀 데이터 붙여넣기
+                    </h3>
+                    <button id="btn-close-paste" class="text-gray-500 hover:text-gray-800 p-1 rounded-full hover:bg-gray-200 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="p-4">
+                    <p class="text-sm text-gray-600 mb-3">엑셀에서 <span class="font-bold text-blue-600">헤더(ZID, 권역 등)를 포함한 셀 영역</span>을 드래그하여 복사한 후, 아래 입력창에 붙여넣어 주세요.</p>
+                    <textarea id="paste-area" class="w-full h-64 p-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 whitespace-pre text-gray-700 font-mono bg-gray-50 custom-scrollbar" placeholder="ZID   권역   존이름   lat   lng   존구분   반경km   월주차료   차종&#10;23162 동남권 르피에드 문정..."></textarea>
+                </div>
+                <div class="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl flex justify-end">
+                    <button id="btn-apply-paste" class="py-2 px-6 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors shadow-sm">
+                        데이터 적용하기
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Visualization Report Modal -->
+        <div id="vis-modal" class="fixed inset-0 bg-gray-900 bg-opacity-60 z-[120] hidden flex-col items-center justify-center backdrop-blur-sm p-4 flex opacity-0 transition-opacity duration-300" style="display: none;">
+            <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl flex flex-col h-[85vh] transform scale-95 transition-transform duration-300" id="vis-modal-content">
+                <div class="p-5 border-b border-gray-200 bg-blue-50 rounded-t-2xl flex justify-between items-center">
+                    <h3 class="text-xl font-extrabold text-blue-900 flex items-center gap-2">
+                        📊 배달 커버리지 시각화 리포트
+                    </h3>
+                    <button id="btn-close-vis" class="text-gray-500 hover:text-gray-800 p-1 rounded-full hover:bg-gray-200 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+                <div class="p-6 flex-1 overflow-auto custom-scrollbar bg-gray-50 rounded-b-2xl">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Chart 1: 권역별 배달 거점 수 -->
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col">
+                            <h4 class="text-sm font-bold text-gray-700 mb-4 text-center">권역별 배달 거점 및 제공 차종 수</h4>
+                            <div class="flex-1 relative min-h-[250px]">
+                                <canvas id="chartRegionCount"></canvas>
+                            </div>
+                        </div>
+                        <!-- Chart 2: 권역별 주요 차종 분포 -->
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col">
+                            <h4 class="text-sm font-bold text-gray-700 mb-4 text-center">권역별 차종 다양성 구성 현황</h4>
+                            <div class="flex-1 relative min-h-[250px]">
+                                <canvas id="chartRegionCars"></canvas>
+                            </div>
+                        </div>
+                        <!-- Chart 3: 구 단위 상위 커버리지 지역 -->
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col md:col-span-2">
+                            <h4 class="text-sm font-bold text-gray-700 mb-4 text-center">구 단위 차종 다양성 구성 (상위 10개 구)</h4>
+                            <div class="flex-1 relative min-h-[300px]">
+                                <canvas id="chartGuCars"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- 1. Map Initialization (VWorld Map for precise Korean details) ---
+        const map = L.map('map').setView([37.5665, 126.9780], 12); // Center of Seoul
+
+        L.tileLayer('https://xdworld.vworld.kr/2d/Base/service/{z}/{x}/{y}.png', {
+            attribution: '© VWorld (국토교통부)',
+            maxZoom: 19
+        }).addTo(map);
+
+        // --- Approximate Reverse Geocoding Data (서울 주요 구/동 매칭용) ---
+        const seoulRegions = turf.featureCollection([
+            turf.point([127.022, 37.524], {name: '강남구 신사동'}), turf.point([127.036, 37.500], {name: '강남구 역삼동'}), turf.point([127.063, 37.482], {name: '강남구 개포동'}),
+            turf.point([127.014, 37.483], {name: '서초구 서초동'}), turf.point([126.992, 37.483], {name: '서초구 방배동'}),
+            turf.point([127.123, 37.482], {name: '송파구 문정동'}), turf.point([127.098, 37.511], {name: '송파구 잠실동'}), turf.point([127.122, 37.495], {name: '송파구 가락동'}),
+            turf.point([127.125, 37.545], {name: '강동구 천호동'}), turf.point([127.164, 37.550], {name: '강동구 상일동'}),
+            turf.point([127.073, 37.534], {name: '광진구 자양동'}), turf.point([127.047, 37.544], {name: '성동구 성수동'}),
+            turf.point([126.994, 37.534], {name: '용산구 이태원동'}), turf.point([126.918, 37.554], {name: '마포구 서교동'}), turf.point([126.896, 37.578], {name: '마포구 상암동'}),
+            turf.point([126.936, 37.559], {name: '서대문구 신촌동'}), turf.point([126.985, 37.561], {name: '중구 명동'}), turf.point([126.974, 37.606], {name: '종로구 평창동'}),
+            turf.point([127.023, 37.604], {name: '성북구 길음동'}), turf.point([127.045, 37.587], {name: '동대문구 청량리동'}), turf.point([127.086, 37.588], {name: '중랑구 면목동'}),
+            turf.point([127.061, 37.655], {name: '노원구 상계동'}), turf.point([127.043, 37.666], {name: '도봉구 방학동'}), turf.point([127.022, 37.638], {name: '강북구 수유동'}),
+            turf.point([126.929, 37.620], {name: '은평구 불광동'}), turf.point([126.933, 37.641], {name: '은평구 진관동'}),
+            turf.point([126.828, 37.566], {name: '강서구 마곡동'}), turf.point([126.840, 37.542], {name: '강서구 화곡동'}), turf.point([126.872, 37.526], {name: '양천구 목동'}),
+            turf.point([126.924, 37.521], {name: '영등포구 여의도동'}), turf.point([126.906, 37.520], {name: '영등포구 영등포동'}),
+            turf.point([126.884, 37.508], {name: '구로구 신도림동'}), turf.point([126.887, 37.495], {name: '구로구 구로동'}), turf.point([126.880, 37.476], {name: '금천구 가산동'}),
+            turf.point([126.929, 37.481], {name: '관악구 신림동'}), turf.point([126.953, 37.482], {name: '관악구 봉천동'}), turf.point([126.978, 37.483], {name: '동작구 사당동'})
+        ]);
+
+        // --- 2. Global State ---
+        let zoneData = [];         // Parsed CSV data
+        let allCarTypes = [];      // Unique list of all special cars
+        let markersLayer = L.layerGroup().addTo(map);
+        let hexLayer = L.layerGroup().addTo(map);
+        let callPointLayer = L.layerGroup().addTo(map);
+        let coverageCircle = null;
+
+        const seoulBbox = [126.7642, 37.4285, 127.1835, 37.7151];
+        const hexGridRaw = turf.hexGrid(seoulBbox, 0.6, {units: 'kilometers'});
+        
+        // --- 3. Mock Data Generator ---
+        const generateMockData = () => {
+            const data = [];
+            let idCounter = 1;
+            const regions = ['동남권', '동북권', '서남권', '서북권', '도심권'];
+            const cars = ['카니발', '스타리아', '팰리세이드', '아이오닉5', 'EV6'];
+            
+            const outskirts = [
+                { lat: 37.65, lng: 127.05, name: '도봉산 공영주차장(10km)', radius: 10 },
+                { lat: 37.45, lng: 126.90, name: '금천구청역 타워(5km)', radius: 5 },
+                { lat: 37.55, lng: 126.80, name: '마곡 외곽주차장(10km)', radius: 10 },
+                { lat: 37.55, lng: 127.15, name: '강동 강일차고지(5km)', radius: 5 },
+                { lat: 37.60, lng: 126.92, name: '은평 뉴타운 거점(10km)', radius: 10 }
+            ];
+
+            outskirts.forEach(loc => {
+                data.push({
+                    ZID: idCounter++,
+                    권역: regions[Math.floor(Math.random() * regions.length)],
+                    존이름: loc.name,
+                    lat: loc.lat,
+                    lng: loc.lng,
+                    존구분: `부름확대존(${loc.radius})`,
+                    반경km: loc.radius,
+                    월주차료: Math.floor(Math.random() * 5 + 3) * 10000,
+                    차종: cars.join(' / ')
+                });
+            });
+
+            const centers = [
+                { lat: 37.566, lng: 126.978, name: '시청 광장주차장' },
+                { lat: 37.498, lng: 127.027, name: '강남역 1번출구' },
+                { lat: 37.532, lng: 126.990, name: '이태원 중심가' },
+                { lat: 37.555, lng: 126.923, name: '홍대입구역 타워' }
+            ];
+
+            centers.forEach(loc => {
+                data.push({
+                    ZID: idCounter++,
+                    권역: regions[Math.floor(Math.random() * regions.length)],
+                    존이름: loc.name,
+                    lat: loc.lat,
+                    lng: loc.lng,
+                    존구분: '부름축소존',
+                    반경km: 5,
+                    월주차료: Math.floor(Math.random() * 20 + 20) * 10000,
+                    차종: '카니발'
+                });
+            });
+
+            return Papa.unparse(data);
+        };
+
+        // --- 4. Core Functions ---
+
+        function processData(data) {
+            zoneData = data.filter(row => row.lat && row.lng && row.존이름).map(row => {
+                if (!row.차종 || row.차종.trim() === '') {
+                    row.차종 = '기본';
+                }
+                row.반경km = parseFloat(row.반경km);
+                if(isNaN(row.반경km) || row.반경km <= 0) {
+                    row.반경km = 5;
+                }
+                // 숨기기 기능 플래그 (기본: 노출)
+                row.isHidden = false;
+                return row;
+            });
+            
+            const carSet = new Set();
+            zoneData.forEach(row => {
+                if(row.차종) {
+                    row.차종.split('/').forEach(car => {
+                        const trimmed = car.trim();
+                        if(trimmed) carSet.add(trimmed);
+                    });
+                }
+            });
+            allCarTypes = Array.from(carSet).sort();
+
+            renderMarkers();
+            updateCarFiltersUI();
+            
+            // Show buttons
+            document.getElementById('btn-view-data').classList.remove('hidden');
+            document.getElementById('btn-vis-report').classList.remove('hidden');
+            
+            document.getElementById('analysis-controls').style.opacity = '1';
+            document.getElementById('analysis-controls').style.pointerEvents = 'auto';
+            
+            if(document.getElementById('toggle-hex').checked) {
+                renderHexagons();
+            }
+        }
+
+        function renderMarkers() {
+            markersLayer.clearLayers();
+
+            zoneData.forEach(zone => {
+                // 숨겨진 존은 마커 렌더링에서 제외
+                if (zone.isHidden) return;
+
+                const isExpansion = (zone.존구분 || '').includes('부름확대존');
+                
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div class="zone-marker-icon ${isExpansion ? 'marker-expansion' : 'marker-reduction'}"></div>`,
+                    iconSize: [16, 16],
+                    iconAnchor: [8, 8]
+                });
+
+                const marker = L.marker([parseFloat(zone.lat), parseFloat(zone.lng)], { icon });
+                
+                const popupHtml = `
+                    <div class="bg-white p-4 w-64 text-sm text-gray-800">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="px-2 py-0.5 text-xs font-bold text-white rounded ${isExpansion ? 'bg-blue-500' : 'bg-gray-500'}">${zone.존구분}</span>
+                            <span class="text-gray-500 text-xs">${zone.권역}</span>
+                        </div>
+                        <h3 class="font-bold text-lg border-b pb-2 mb-2">${zone.존이름}</h3>
+                        <div class="grid grid-cols-3 gap-y-2 text-xs">
+                            <div class="text-gray-500">배달반경</div>
+                            <div class="col-span-2 font-bold text-blue-600">${zone.반경km}km</div>
+                            <div class="text-gray-500">주차료</div>
+                            <div class="col-span-2 font-medium">${zone.월주차료 ? Number(zone.월주차료).toLocaleString() + '원/월' : '-'}</div>
+                            <div class="text-gray-500">차종</div>
+                            <div class="col-span-2 font-medium leading-tight">${zone.차종}</div>
+                        </div>
+                    </div>
+                `;
+                marker.bindPopup(popupHtml);
+
+                marker.on('mouseover', (e) => {
+                    if(isExpansion) { 
+                        if(coverageCircle) map.removeLayer(coverageCircle);
+                        coverageCircle = L.circle([zone.lat, zone.lng], {
+                            radius: zone.반경km * 1000,
+                            color: '#3b82f6',
+                            fillColor: '#3b82f6',
+                            fillOpacity: 0.1,
+                            weight: 1,
+                            dashArray: '5, 5'
+                        }).addTo(map);
+                    }
+                });
+                marker.on('mouseout', () => {
+                    if(coverageCircle) {
+                        map.removeLayer(coverageCircle);
+                        coverageCircle = null;
+                    }
+                });
+
+                markersLayer.addLayer(marker);
+            });
+        }
+
+        function updateCarFiltersUI() {
+            const container = document.getElementById('car-checkboxes');
+            container.innerHTML = '';
+            
+            allCarTypes.forEach(car => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-2';
+                div.innerHTML = `
+                    <input type="checkbox" id="car-${car}" value="${car}" class="car-filter-chk w-4 h-4 text-blue-600 rounded border-gray-300">
+                    <label for="car-${car}" class="text-gray-700 cursor-pointer">${car}</label>
+                `;
+                container.appendChild(div);
+            });
+
+            document.querySelectorAll('.car-filter-chk').forEach(chk => {
+                chk.addEventListener('change', () => {
+                    if(document.getElementById('toggle-hex').checked) renderHexagons();
+                });
+            });
+        }
+
+        function renderHexagons() {
+            showLoading(true);
+            
+            setTimeout(() => {
+                hexLayer.clearLayers();
+                
+                const mode = document.querySelector('input[name="analysis_mode"]:checked').value;
+                const selectedCars = Array.from(document.querySelectorAll('.car-filter-chk:checked')).map(cb => cb.value);
+                
+                // 숨겨진 존 제외 (!z.isHidden 조건 추가)
+                const expansionZones = zoneData.filter(z => !z.isHidden && (z.존구분 || '').includes('부름확대존')).map(z => {
+                    const cars = z.차종 ? z.차종.split('/').map(c => c.trim()) : [];
+                    return {
+                        point: turf.point([parseFloat(z.lng), parseFloat(z.lat)]),
+                        cars: cars,
+                        radius: z.반경km
+                    };
+                });
+
+                let shadowCount = 0;
+                let totalHexCount = 0;
+                let shadowRegionsMap = new Map(); 
+
+                const styledFeatures = hexGridRaw.features.map(hex => {
+                    totalHexCount++;
+                    const centroid = turf.centroid(hex);
+                    
+                    const nearbyZones = expansionZones.filter(zone => {
+                        const distance = turf.distance(centroid, zone.point, {units: 'kilometers'});
+                        return distance <= zone.radius;
+                    });
+
+                    let isShadow = false;
+                    let availableCarsSet = new Set();
+                    nearbyZones.forEach(z => z.cars.forEach(c => availableCarsSet.add(c)));
+                    const availableCars = Array.from(availableCarsSet);
+
+                    if (mode === 'overall') {
+                        const requiredCount = Math.ceil(allCarTypes.length * 0.5);
+                        if (availableCars.length < requiredCount) {
+                            isShadow = true;
+                        }
+                    } else if (mode === 'specific') {
+                        if (selectedCars.length > 0) {
+                            for(let car of selectedCars) {
+                                if(!availableCars.includes(car)) {
+                                    isShadow = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            isShadow = false; 
+                        }
+                    }
+
+                    if (isShadow) {
+                        shadowCount++;
+                        const nearestRegion = turf.nearestPoint(centroid, seoulRegions);
+                        const regionName = nearestRegion.properties.name;
+                        
+                        if (!shadowRegionsMap.has(regionName)) {
+                            shadowRegionsMap.set(regionName, [centroid.geometry.coordinates[1], centroid.geometry.coordinates[0]]);
+                        }
+                    }
+
+                    let tooltipText = isShadow ? '<b class="text-red-500">음영지역</b>' : '<b class="text-blue-500">서비스 가능구역</b>';
+                    tooltipText += `<br/>호출 가능 차종: ${availableCars.length > 0 ? availableCars.join(', ') : '없음'}`;
+
+                    const maxConnectedRadius = nearbyZones.length > 0 ? Math.max(...nearbyZones.map(z => z.radius)) : 5;
+
+                    hex.properties = {
+                        isShadow: isShadow,
+                        tooltip: tooltipText,
+                        centroid: { lat: centroid.geometry.coordinates[1], lng: centroid.geometry.coordinates[0] },
+                        nearbyZoneCoords: nearbyZones.map(z => [z.point.geometry.coordinates[1], z.point.geometry.coordinates[0]]),
+                        maxRadius: maxConnectedRadius
+                    };
+                    return hex;
+                });
+
+                const geoJsonLayer = L.geoJSON(styledFeatures, {
+                    style: function (feature) {
+                        if (feature.properties.isShadow) {
+                            return { color: '#dc2626', weight: 1, fillColor: '#ef4444', fillOpacity: 0.4 };
+                        } else {
+                            return { color: '#3b82f6', weight: 1, fillColor: '#60a5fa', fillOpacity: 0.1 };
+                        }
+                    },
+                    onEachFeature: function (feature, layer) {
+                        layer.bindTooltip(feature.properties.tooltip, { sticky: true, className: 'text-xs' });
+
+                        layer.on('mouseover', function() {
+                            callPointLayer.clearLayers();
+                            
+                            const centerLatLng = [feature.properties.centroid.lat, feature.properties.centroid.lng];
+                            
+                            L.circleMarker(centerLatLng, {
+                                radius: 4, color: '#111827', fillColor: '#111827', fillOpacity: 1, interactive: false
+                            }).addTo(callPointLayer).bindTooltip('가상 호출지', {permanent: true, direction: 'top', className: 'text-xs bg-gray-800 text-white border-0 opacity-80'}).openTooltip();
+                            
+                            L.circle(centerLatLng, {
+                                radius: feature.properties.maxRadius * 1000, 
+                                color: '#111827',
+                                fillColor: '#111827',
+                                fillOpacity: 0.03,
+                                weight: 2,
+                                dashArray: '4, 4',
+                                interactive: false
+                            }).addTo(callPointLayer);
+
+                            if(feature.properties.nearbyZoneCoords && feature.properties.nearbyZoneCoords.length > 0) {
+                                feature.properties.nearbyZoneCoords.forEach(coord => {
+                                    L.polyline([centerLatLng, coord], {
+                                        color: '#3b82f6',
+                                        weight: 2,
+                                        opacity: 0.6,
+                                        dashArray: '4, 4',
+                                        interactive: false
+                                    }).addTo(callPointLayer);
+                                });
+                            }
+                        });
+
+                        layer.on('mouseout', function() {
+                            callPointLayer.clearLayers();
+                        });
+                    }
+                }).addTo(hexLayer);
+
+                // Update Stats
+                document.getElementById('stats-panel').classList.remove('hidden');
+                document.getElementById('stat-total-hex').innerText = totalHexCount.toLocaleString() + '개';
+                const ratio = ((shadowCount / totalHexCount) * 100).toFixed(1);
+                document.getElementById('stat-shadow-ratio').innerText = ratio + '%';
+
+                const regionContainer = document.getElementById('stat-shadow-regions');
+                if (shadowCount === 0) {
+                    regionContainer.innerHTML = '<span class="text-xs text-gray-400">음영지역 없음</span>';
+                } else {
+                    const regionsArray = Array.from(shadowRegionsMap.keys());
+                    const displayRegions = regionsArray.slice(0, 12);
+                    let tagsHtml = displayRegions.map(r => `<span class="region-tag cursor-pointer hover:bg-red-200 transition-colors px-2 py-1 bg-red-50 text-red-600 text-[10px] font-medium rounded border border-red-100 shadow-sm" data-region="${r}">${r}</span>`).join('');
+                    
+                    if (regionsArray.length > 12) {
+                        tagsHtml += `<button id="btn-show-all-regions" class="cursor-pointer hover:bg-gray-200 transition-colors px-2 py-1 bg-gray-50 text-gray-500 text-[10px] font-medium rounded border border-gray-200 shadow-sm">+${regionsArray.length - 12} 더보기</button>`;
+                        tagsHtml += `<div id="hidden-regions" class="hidden flex-wrap gap-1 w-full mt-1">`;
+                        tagsHtml += regionsArray.slice(12).map(r => `<span class="region-tag cursor-pointer hover:bg-red-200 transition-colors px-2 py-1 bg-red-50 text-red-600 text-[10px] font-medium rounded border border-red-100 shadow-sm" data-region="${r}">${r}</span>`).join('');
+                        tagsHtml += `</div>`;
+                    }
+                    regionContainer.innerHTML = tagsHtml;
+
+                    const btnShowAll = document.getElementById('btn-show-all-regions');
+                    if (btnShowAll) {
+                        btnShowAll.addEventListener('click', () => {
+                            document.getElementById('hidden-regions').classList.remove('hidden');
+                            document.getElementById('hidden-regions').classList.add('flex');
+                            btnShowAll.style.display = 'none';
+                        });
+                    }
+
+                    document.querySelectorAll('.region-tag').forEach(tag => {
+                        tag.addEventListener('click', (e) => {
+                            const regionName = e.target.getAttribute('data-region');
+                            const targetCoords = shadowRegionsMap.get(regionName);
+                            if (targetCoords) {
+                                map.flyTo(targetCoords, 14, { duration: 0.8 });
+                            }
+                        });
+                    });
+                }
+
+                showLoading(false);
+            }, 100);
+        }
+
+        function showLoading(show) {
+            const el = document.getElementById('loading');
+            if(show) el.classList.remove('hidden');
+            else el.classList.add('hidden');
+        }
+
+        // --- 5. Event Listeners ---
+
+        document.getElementById('csv-upload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if(!file) return;
+            Papa.parse(file, { header: true, skipEmptyLines: true, complete: function(results) { processData(results.data); } });
+        });
+
+        document.getElementById('btn-load-sample').addEventListener('click', function() {
+            const csvString = generateMockData();
+            Papa.parse(csvString, { header: true, skipEmptyLines: true, complete: function(results) { processData(results.data); } });
+        });
+
+        document.getElementById('toggle-hex').addEventListener('change', function(e) {
+            if(e.target.checked) {
+                if(zoneData.length === 0) {
+                    alert('데이터를 먼저 업로드하거나 샘플 데이터를 불러오세요.');
+                    e.target.checked = false;
+                    return;
+                }
+                renderHexagons();
+            } else {
+                hexLayer.clearLayers();
+                document.getElementById('stats-panel').classList.add('hidden');
+            }
+        });
+
+        document.querySelectorAll('input[name="analysis_mode"]').forEach(radio => {
+            radio.addEventListener('change', function(e) {
+                const carFilterContainer = document.getElementById('car-filter-container');
+                if(e.target.value === 'specific') {
+                    carFilterContainer.classList.remove('hidden');
+                } else {
+                    carFilterContainer.classList.add('hidden');
+                }
+                if(document.getElementById('toggle-hex').checked) renderHexagons();
+            });
+        });
+
+        // --- Data Modal Controls ---
+        const dataModal = document.getElementById('data-modal');
+        const modalContent = document.getElementById('data-modal-content');
+        
+        function openModal() {
+            populateTable();
+            dataModal.style.display = 'flex';
+            void dataModal.offsetWidth;
+            dataModal.classList.remove('opacity-0');
+            modalContent.classList.remove('scale-95');
+        }
+
+        function closeModal() {
+            dataModal.classList.add('opacity-0');
+            modalContent.classList.add('scale-95');
+            setTimeout(() => { dataModal.style.display = 'none'; }, 300);
+        }
+
+        function populateTable() {
+            const tbody = document.getElementById('data-table-body');
+            tbody.innerHTML = '';
+            
+            zoneData.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                
+                // 숨김 상태에 따른 행 스타일링 변경
+                tr.className = row.isHidden ? 'bg-gray-50 opacity-50 border-b grayscale' : 'bg-white border-b hover:bg-gray-50';
+                
+                const isExpansion = (row.존구분 || '').includes('부름확대존');
+                const badgeClass = isExpansion ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800';
+
+                tr.innerHTML = `
+                    <td class="px-6 py-4 font-medium text-gray-900 ${row.isHidden ? 'line-through' : ''}">${row.ZID || '-'}</td>
+                    <td class="px-6 py-4">${row.권역 || '-'}</td>
+                    <td class="px-6 py-4 font-bold ${row.isHidden ? 'line-through' : ''}">${row.존이름 || '-'}</td>
+                    <td class="px-6 py-4"><span class="px-2 py-1 rounded text-xs font-semibold ${badgeClass}">${row.존구분 || '-'}</span></td>
+                    <td class="px-4 py-4 text-center font-bold text-blue-600 bg-blue-50/50">${row.반경km}km</td>
+                    <td class="px-6 py-4 text-right font-mono">${row.월주차료 ? Number(row.월주차료).toLocaleString() + '원' : '-'}</td>
+                    <td class="px-6 py-4 leading-relaxed">${row.차종 || '-'}</td>
+                    <td class="px-4 py-4 text-center">
+                        <button class="toggle-visibility-btn px-4 py-1.5 rounded text-xs font-bold transition-all shadow-sm ${row.isHidden ? 'bg-gray-200 text-gray-700 hover:bg-gray-300' : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'}" data-index="${index}">
+                            ${row.isHidden ? '보이기' : '숨기기'}
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // 숨기기/보이기 버튼 이벤트 등록
+            document.querySelectorAll('.toggle-visibility-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const idx = e.target.getAttribute('data-index');
+                    zoneData[idx].isHidden = !zoneData[idx].isHidden; // 상태 토글
+                    
+                    populateTable(); // 표 다시 그리기
+                    renderMarkers(); // 지도 마커 다시 그리기
+                    if(document.getElementById('toggle-hex').checked) {
+                        renderHexagons(); // 헥사곤 적용하여 음영지역 재계산
+                    }
+                });
+            });
+
+            const activeCount = zoneData.filter(z => !z.isHidden).length;
+            document.getElementById('data-table-count').innerText = `총 ${zoneData.length}건 (표시 중: ${activeCount}건)`;
+        }
+
+        document.getElementById('btn-view-data').addEventListener('click', openModal);
+        document.getElementById('btn-close-modal').addEventListener('click', closeModal);
+        
+        dataModal.addEventListener('click', (e) => {
+            if (e.target === dataModal) closeModal();
+        });
+
+        // --- Paste Modal Controls ---
+        const pasteModal = document.getElementById('paste-modal');
+        const pasteModalContent = document.getElementById('paste-modal-content');
+        
+        document.getElementById('btn-open-paste').addEventListener('click', () => {
+            pasteModal.style.display = 'flex';
+            void pasteModal.offsetWidth; 
+            pasteModal.classList.remove('opacity-0');
+            pasteModalContent.classList.remove('scale-95');
+            document.getElementById('paste-area').focus();
+        });
+
+        function closePasteModal() {
+            pasteModal.classList.add('opacity-0');
+            pasteModalContent.classList.add('scale-95');
+            setTimeout(() => { pasteModal.style.display = 'none'; }, 300);
+        }
+
+        document.getElementById('btn-close-paste').addEventListener('click', closePasteModal);
+        pasteModal.addEventListener('click', (e) => { if (e.target === pasteModal) closePasteModal(); });
+
+        document.getElementById('btn-apply-paste').addEventListener('click', () => {
+            const text = document.getElementById('paste-area').value;
+            if(!text.trim()) { alert('데이터를 붙여넣어 주세요.'); return; }
+            Papa.parse(text.trim(), {
+                header: true, skipEmptyLines: true, complete: function(results) {
+                    if(results.errors.length > 0 && results.data.length === 0) {
+                        alert('오류 발생. 헤더를 포함하여 복사했는지 확인해주세요.'); return;
+                    }
+                    const cleanedData = results.data.map(row => {
+                        const newRow = {};
+                        for(let key in row) newRow[key.trim()] = row[key];
+                        return newRow;
+                    });
+                    processData(cleanedData);
+                    closePasteModal();
+                    document.getElementById('paste-area').value = '';
+                }
+            });
+        });
+
+        // --- Visualization Report Feature ---
+        const visModal = document.getElementById('vis-modal');
+        const visModalContent = document.getElementById('vis-modal-content');
+        let charts = []; // To destroy previous charts
+        
+        document.getElementById('btn-close-vis').addEventListener('click', closeVisModal);
+        visModal.addEventListener('click', (e) => { if (e.target === visModal) closeVisModal(); });
+
+        function openVisModal() {
+            visModal.style.display = 'flex';
+            void visModal.offsetWidth;
+            visModal.classList.remove('opacity-0');
+            visModalContent.classList.remove('scale-95');
+        }
+
+        function closeVisModal() {
+            visModal.classList.add('opacity-0');
+            visModalContent.classList.add('scale-95');
+            setTimeout(() => { visModal.style.display = 'none'; }, 300);
+        }
+
+        document.getElementById('btn-vis-report').addEventListener('click', () => {
+            // 활성화된(숨김 처리되지 않은) '부름확대존'만 타겟으로 분석
+            const activeZones = zoneData.filter(z => !z.isHidden && (z.존구분 || '').includes('부름확대존'));
+            
+            if(activeZones.length === 0) {
+                alert("분석할 부름확대존 데이터가 없습니다. (데이터를 추가하거나 숨김 해제해주세요)");
+                return;
+            }
+
+            openVisModal();
+            generateCharts(activeZones);
+        });
+
+        function generateCharts(activeZones) {
+            // 기존 차트가 있다면 초기화
+            charts.forEach(chart => chart.destroy());
+            charts = [];
+
+            // 1. Data Aggregation (데이터 집계)
+            const regionStats = {};
+            const guStats = {};
+            
+            activeZones.forEach(z => {
+                const region = z.권역 || '미분류';
+                const cars = z.차종 ? z.차종.split('/').map(c => c.trim()).filter(c => c !== '') : ['기본'];
+
+                // 권역별 통계 (차종 다양성을 위해 Set 사용)
+                if(!regionStats[region]) {
+                    regionStats[region] = { zoneCount: 0, uniqueCars: new Set() };
+                }
+                regionStats[region].zoneCount += 1;
+                
+                cars.forEach(car => {
+                    regionStats[region].uniqueCars.add(car);
+                });
+
+                // 구 단위 통계 (좌표를 기반으로 가장 가까운 구 탐색)
+                const pt = turf.point([parseFloat(z.lng), parseFloat(z.lat)]);
+                const nearest = turf.nearestPoint(pt, seoulRegions);
+                const guName = nearest.properties.name.split(' ')[0]; // '강남구 신사동' -> '강남구'
+                
+                if(!guStats[guName]) {
+                    guStats[guName] = { zoneCount: 0, uniqueCars: new Set() };
+                }
+                guStats[guName].zoneCount += 1;
+                
+                cars.forEach(car => {
+                    guStats[guName].uniqueCars.add(car);
+                });
+            });
+
+            const allCars = Array.from(new Set(activeZones.flatMap(z => z.차종 ? z.차종.split('/').map(c=>c.trim()).filter(c=>c!=='') : ['기본'])));
+            const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#84cc16'];
+
+            // 2. Chart 1: 권역별 배달 거점 및 제공 차종 수 (Bar)
+            const regions = Object.keys(regionStats);
+            const ctx1 = document.getElementById('chartRegionCount').getContext('2d');
+            charts.push(new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels: regions,
+                    datasets: [
+                        {
+                            label: '거점 수',
+                            data: regions.map(r => regionStats[r].zoneCount),
+                            backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                            borderRadius: 4
+                        },
+                        {
+                            label: '제공 차종 수 (다양성)',
+                            data: regions.map(r => regionStats[r].uniqueCars.size),
+                            backgroundColor: 'rgba(99, 102, 241, 0.8)',
+                            borderRadius: 4
+                        }
+                    ]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom' } },
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                }
+            }));
+
+            // 3. Chart 2: 권역별 차종 다양성 구성 현황 (Stacked Bar)
+            const datasets2 = allCars.map((car, idx) => ({
+                label: car,
+                // 핵심 수정: 해당 지역에 차종이 존재하면 1, 없으면 0을 반환 (누적 높이 = 다양성 개수)
+                data: regions.map(r => regionStats[r].uniqueCars.has(car) ? 1 : 0),
+                backgroundColor: colors[idx % colors.length]
+            }));
+
+            const ctx2 = document.getElementById('chartRegionCars').getContext('2d');
+            charts.push(new Chart(ctx2, {
+                type: 'bar',
+                data: { labels: regions, datasets: datasets2 },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { stacked: true },
+                        y: { stacked: true, ticks: { stepSize: 1 }, title: { display: true, text: '보유 차종 종류 수' } }
+                    },
+                    plugins: { 
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                // 값이 1인(보유한) 차종만 툴팁에 표시
+                                label: function(context) {
+                                    return context.raw === 1 ? context.dataset.label + ' 보유' : null;
+                                }
+                            }
+                        }
+                    }
+                }
+            }));
+
+            // 4. Chart 3: 구 단위 차종 다양성 구성 (상위 10개 구) (Stacked Bar)
+            // 다양성(uniqueCars.size)을 1순위로, 거점 수(zoneCount)를 2순위로 내림차순 정렬하여 상위 10개 추출
+            const sortedGus = Object.entries(guStats).sort((a, b) => {
+                if (b[1].uniqueCars.size !== a[1].uniqueCars.size) {
+                    return b[1].uniqueCars.size - a[1].uniqueCars.size;
+                }
+                return b[1].zoneCount - a[1].zoneCount;
+            });
+            const topGus = sortedGus.slice(0, 10);
+            const guLabels = topGus.map(g => g[0]);
+            
+            const datasets3 = allCars.map((car, idx) => ({
+                label: car,
+                // 핵심 수정: 해당 구에 차종이 존재하면 1, 없으면 0을 반환
+                data: topGus.map(g => g[1].uniqueCars.has(car) ? 1 : 0),
+                backgroundColor: colors[idx % colors.length]
+            }));
+
+            const ctx3 = document.getElementById('chartGuCars').getContext('2d');
+            charts.push(new Chart(ctx3, {
+                type: 'bar',
+                data: { labels: guLabels, datasets: datasets3 },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { stacked: true },
+                        y: { stacked: true, ticks: { stepSize: 1 }, title: { display: true, text: '보유 차종 종류 수' } }
+                    },
+                    plugins: { 
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                // 값이 1인(보유한) 차종만 툴팁에 표시
+                                label: function(context) {
+                                    return context.raw === 1 ? context.dataset.label + ' 보유' : null;
+                                }
+                            }
+                        }
+                    }
+                }
+            }));
+        }
+
+    </script>
+</body>
+</html>
